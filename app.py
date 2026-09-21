@@ -10,7 +10,11 @@ import io
 import threading
 
 from gtts import gTTS
-from streamlit_webrtc import webrtc_streamer, WebRtcMode
+from streamlit_webrtc import (
+    webrtc_streamer,
+    WebRtcMode,
+    VideoHTMLAttributes
+)
 import av
 
 
@@ -27,36 +31,40 @@ st.set_page_config(
 
 
 # =========================================================
-# CSS
+# СТИЛІ
 # =========================================================
 
 st.markdown("""
-    <style>
+<style>
 
-    .big-font {
-        font-size: 80px !important;
-        font-weight: bold;
-        color: #FF4B4B;
-        text-align: center;
-        margin-bottom: 0px;
-    }
+.big-font {
+    font-size: 65px !important;
+    font-weight: bold;
+    text-align: center;
+    margin-top: 40px;
+}
 
-    .status-text {
-        font-size: 24px;
-        text-align: center;
-        margin-top: 20px;
-    }
+.status-text {
+    font-size: 24px;
+    text-align: center;
+    margin-top: 20px;
+}
 
-    .stButton>button {
-        width: 100%;
-        border-radius: 20px;
-        height: 3em;
-        font-size: 18px;
-        background-color: #FF4B4B;
-        color: white;
-    }
+.result-box {
+    padding: 25px;
+    border-radius: 20px;
+    text-align: center;
+    margin-top: 20px;
+}
 
-    </style>
+.stButton > button {
+    width: 100%;
+    border-radius: 20px;
+    height: 3em;
+    font-size: 18px;
+}
+
+</style>
 """, unsafe_allow_html=True)
 
 
@@ -84,7 +92,7 @@ ukr_labels = {
 
 
 # =========================================================
-# ОЗВУЧКА
+# ОЗВУЧЕННЯ
 # =========================================================
 
 def speak_text(text):
@@ -118,13 +126,13 @@ def speak_text(text):
 
             unique_id = int(time.time())
 
-            audio_html = f'''
-                <audio autoplay="true" key="{unique_id}">
-                    <source
-                        src="data:audio/mp3;base64,{b64}"
-                        type="audio/mp3">
-                </audio>
-            '''
+            audio_html = f"""
+            <audio autoplay="true" key="{unique_id}">
+                <source
+                    src="data:audio/mp3;base64,{b64}"
+                    type="audio/mp3">
+            </audio>
+            """
 
             st.components.v1.html(
                 audio_html,
@@ -162,6 +170,7 @@ def load_resources():
         static_image_mode=False,
         max_num_hands=1,
         min_detection_confidence=0.5,
+        min_tracking_confidence=0.5,
         model_complexity=0
     )
 
@@ -183,7 +192,7 @@ mp_hands = mp.solutions.hands
 # =========================================================
 
 st.title(
-    "Інтелектуальна система розпізнавання жестів"
+    "🖐️ Інтелектуальна система розпізнавання жестів"
 )
 
 
@@ -206,31 +215,32 @@ with st.sidebar:
     
     4. Тримайте руку нерухомо 1–2 секунди.
     
-    5. Перегляньте результат на екрані.
+    5. Перегляньте результат праворуч.
     
-    6. Натисніть **STOP**, коли завершите роботу.
+    6. Для завершення натисніть **STOP**.
     """)
 
     st.markdown("### Поради")
 
     st.markdown("""
     - використовуйте достатнє освітлення;
-    - тримайте кисть у межах кадру;
+    - тримайте кисть повністю в кадрі;
     - розташовуйте руку ближче до центру;
-    - не показуйте кілька жестів одночасно;
+    - показуйте тільки один жест;
     - не рухайте рукою занадто швидко.
     """)
 
-    st.markdown("### Додатково")
+    st.markdown("### Про систему")
 
     st.info(
-        "Для роботи камери браузер повинен мати "
-        "дозвіл на доступ до камери."
+        "Система використовує MediaPipe Hands "
+        "для визначення 21 точки кисті та "
+        "машинне навчання для класифікації жесту."
     )
 
 
 # =========================================================
-# СПІЛЬНИЙ СТАН ДЛЯ CALLBACK
+# СПІЛЬНИЙ СТАН
 # =========================================================
 
 state_lock = threading.Lock()
@@ -250,12 +260,16 @@ FRAME_THRESHOLD = 5
 
 def video_frame_callback(frame):
 
+    # Отримуємо кадр
     image = frame.to_ndarray(
         format="bgr24"
     )
 
     # Дзеркальне відображення
-    image = cv2.flip(image, 1)
+    image = cv2.flip(
+        image,
+        1
+    )
 
     # BGR → RGB
     frame_rgb = cv2.cvtColor(
@@ -263,53 +277,64 @@ def video_frame_callback(frame):
         cv2.COLOR_BGR2RGB
     )
 
-    # MediaPipe
+    # =====================================================
+    # MEDIAPIPE
+    # =====================================================
+
     results = hands.process(
         frame_rgb
     )
 
-    current_display = "Руку не знайдено"
-
     # =====================================================
-    # ЯКЩО РУКУ ЗНАЙДЕНО
+    # ЯКЩО РУКУ НЕ ЗНАЙДЕНО
     # =====================================================
 
-    if results.multi_hand_landmarks:
+    if not results.multi_hand_landmarks:
 
-        current_display = "Розпізнавання..."
-
-        hand_landmarks = (
-            results.multi_hand_landmarks[0]
+        return av.VideoFrame.from_ndarray(
+            image,
+            format="bgr24"
         )
 
-        # Малюємо точки руки
-        mp_drawing.draw_landmarks(
-            frame_rgb,
-            hand_landmarks,
-            mp_hands.HAND_CONNECTIONS
-        )
+    # =====================================================
+    # РУКУ ЗНАЙДЕНО
+    # =====================================================
 
-        # =================================================
-        # ФОРМУВАННЯ 63 ОЗНАК
-        # =================================================
+    hand_landmarks = (
+        results.multi_hand_landmarks[0]
+    )
 
-        features = []
+    # Малюємо точки руки
+    mp_drawing.draw_landmarks(
+        frame_rgb,
+        hand_landmarks,
+        mp_hands.HAND_CONNECTIONS
+    )
 
-        base = hand_landmarks.landmark[0]
+    # =====================================================
+    # ФОРМУЄМО 63 ОЗНАКИ
+    # =====================================================
 
-        for lm in hand_landmarks.landmark:
+    features = []
 
-            features.extend([
-                lm.x - base.x,
-                lm.y - base.y,
-                lm.z - base.z
-            ])
+    # Точка зап'ястя
+    base = hand_landmarks.landmark[0]
 
-        # =================================================
-        # РОЗПІЗНАВАННЯ
-        # =================================================
+    for lm in hand_landmarks.landmark:
 
-        if len(features) == 63:
+        features.extend([
+            lm.x - base.x,
+            lm.y - base.y,
+            lm.z - base.z
+        ])
+
+    # =====================================================
+    # РОЗПІЗНАВАННЯ
+    # =====================================================
+
+    if len(features) == 63:
+
+        try:
 
             features_scaled = scaler.transform(
                 [features]
@@ -344,71 +369,29 @@ def video_frame_callback(frame):
                         "last_prediction"
                     ] = prediction
 
+                # Жест повинен повторитися
+                # декілька кадрів поспіль
                 if (
                     recognition_state[
                         "prediction_count"
                     ] >= FRAME_THRESHOLD
                 ):
 
-                    current_display = ukr_labels.get(
+                    recognition_state[
+                        "result"
+                    ] = ukr_labels.get(
                         prediction,
                         prediction
                     )
 
-                    recognition_state[
-                        "result"
-                    ] = current_display
+        except Exception:
+
+            pass
 
     # =====================================================
-    # ТЕКСТ НА ВІДЕО
+    # ПОВЕРТАЄМО КАДР
     # =====================================================
 
-    if current_display == "Руку не знайдено":
-
-        text_color = (
-            180,
-            180,
-            180
-        )
-
-    elif current_display == "Розпізнавання...":
-
-        text_color = (
-            0,
-            165,
-            255
-        )
-
-    else:
-
-        text_color = (
-            0,
-            255,
-            0
-        )
-
-    # Чорний фон під текст
-    cv2.rectangle(
-        frame_rgb,
-        (10, 10),
-        (frame_rgb.shape[1] - 10, 80),
-        (0, 0, 0),
-        -1
-    )
-
-    # Текст результату
-    cv2.putText(
-        frame_rgb,
-        current_display,
-        (30, 60),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        1.2,
-        text_color,
-        3,
-        cv2.LINE_AA
-    )
-
-    # RGB → BGR
     output_image = cv2.cvtColor(
         frame_rgb,
         cv2.COLOR_RGB2BGR
@@ -421,11 +404,11 @@ def video_frame_callback(frame):
 
 
 # =========================================================
-# ОСНОВНА ЧАСТИНА
+# КОЛОНКИ
 # =========================================================
 
 col1, col2 = st.columns(
-    [1.5, 1]
+    [1.6, 1]
 )
 
 
@@ -441,12 +424,38 @@ with col1:
 
     ctx = webrtc_streamer(
         key="gesture-recognition",
+
         mode=WebRtcMode.SENDRECV,
+
         video_frame_callback=video_frame_callback,
+
         media_stream_constraints={
-            "video": True,
+            "video": {
+                "width": {
+                    "ideal": 640
+                },
+                "height": {
+                    "ideal": 480
+                }
+            },
             "audio": False
         },
+
+        # Прибираємо кнопки камери/мікрофона
+        media_toggle_controls=False,
+
+        # Прибираємо вигляд відеоплеєра
+        video_html_attrs=VideoHTMLAttributes(
+            autoPlay=True,
+            controls=False,
+            muted=True,
+            style={
+                "width": "100%",
+                "border-radius": "12px"
+            }
+        ),
+
+        # STUN для роботи через інтернет
         rtc_configuration={
             "iceServers": [
                 {
@@ -456,6 +465,7 @@ with col1:
                 }
             ]
         },
+
         async_processing=True
     )
 
@@ -475,53 +485,11 @@ with col2:
 
     result_placeholder = st.empty()
 
-    st.write("---")
+    st.write("")
 
-    # Поточний результат
-    with state_lock:
-
-        current_result = recognition_state[
-            "result"
-        ]
-
-    if current_result == "Руку не знайдено":
-
-        result_placeholder.markdown(
-            """
-            <p class='big-font'
-               style='color: grey; font-size: 40px;'>
-               Руку не знайдено
-            </p>
-            """,
-            unsafe_allow_html=True
-        )
-
-    elif current_result == "Розпізнавання...":
-
-        result_placeholder.markdown(
-            """
-            <p class='big-font'
-               style='color: orange; font-size: 40px;'>
-               Розпізнавання...
-            </p>
-            """,
-            unsafe_allow_html=True
-        )
-
-    else:
-
-        result_placeholder.markdown(
-            f"""
-            <p class='big-font'>
-            {current_result}
-            </p>
-            """,
-            unsafe_allow_html=True
-        )
-
-    # =====================================================
-    # КНОПКА ОЗВУЧУВАННЯ
-    # =====================================================
+    # -----------------------------------------------------
+    # КНОПКА ОЗВУЧЕННЯ
+    # -----------------------------------------------------
 
     if st.button(
         "🔊 Озвучити результат"
@@ -549,10 +517,91 @@ with col2:
             )
 
 
+# =========================================================
+# ОНОВЛЕННЯ РЕЗУЛЬТАТУ
+# =========================================================
+
+while ctx.state.playing:
+
+    with state_lock:
+
+        current_result = recognition_state[
+            "result"
+        ]
+
+    # -----------------------------------------------------
+    # РУКУ НЕ ЗНАЙДЕНО
+    # -----------------------------------------------------
+
+    if current_result == "Руку не знайдено":
+
+        result_placeholder.markdown(
+            """
+            <div class="result-box">
+
+                <p class="big-font"
+                   style="color: grey;">
+                   Руку не знайдено
+                </p>
+
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # -----------------------------------------------------
+    # РОЗПІЗНАВАННЯ
+    # -----------------------------------------------------
+
+    elif current_result == "Розпізнавання...":
+
+        result_placeholder.markdown(
+            """
+            <div class="result-box">
+
+                <p class="big-font"
+                   style="color: orange;">
+                   Розпізнавання...
+                </p>
+
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # -----------------------------------------------------
+    # РОЗПІЗНАНИЙ ЖЕСТ
+    # -----------------------------------------------------
+
+    else:
+
+        result_placeholder.markdown(
+            f"""
+            <div class="result-box">
+
+                <p class="big-font"
+                   style="color: #FF4B4B;">
+                   {current_result}
+                </p>
+
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+    # Невелика пауза,
+    # щоб не навантажувати Streamlit
+    time.sleep(0.1)
+
+
+# =========================================================
+# СТАТУС КАМЕРИ
+# =========================================================
+
 if ctx.state.playing:
 
     st.success(
-        "🟢 Камера працює"
+        "🟢 Камера увімкнена"
     )
 
 else:
