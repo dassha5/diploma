@@ -4,3 +4,4 @@ mediapipe==0.10.21
 numpy
 gTTS
 scikit-learn
+streamlit-webrtc
