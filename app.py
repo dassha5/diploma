@@ -44,14 +44,14 @@ st.markdown("""
 
 .result-text {
     text-align: center;
-    font-size: 55px;
+    font-size: 52px;
     font-weight: bold;
-    margin-top: 50px;
+    margin-top: 55px;
 }
 
-.camera-status {
+.info-text {
     text-align: center;
-    margin-top: 15px;
+    font-size: 16px;
 }
 
 </style>
@@ -59,7 +59,7 @@ st.markdown("""
 
 
 # =========================================================
-# ЖЕСТИ
+# НАЗВИ ЖЕСТІВ
 # =========================================================
 
 ukr_labels = {
@@ -98,7 +98,6 @@ def load_resources():
     )
 
     with open(model_path, "rb") as f:
-
         data = pickle.load(f)
 
     hands = mp.solutions.hands.Hands(
@@ -123,7 +122,7 @@ mp_hands = mp.solutions.hands
 
 
 # =========================================================
-# СТАН РОЗПІЗНАВАННЯ
+# СПІЛЬНИЙ СТАН
 # =========================================================
 
 state_lock = threading.Lock()
@@ -134,15 +133,27 @@ recognition_state = {
     "prediction_count": 0
 }
 
+
+# Скільки однакових кадрів потрібно
+# для підтвердження жесту
 FRAME_THRESHOLD = 5
 
 
+# Лічильник кадрів
+frame_counter = 0
+
+
 # =========================================================
-# ОБРОБКА ВІДЕО
+# ОБРОБКА КАДРУ
 # =========================================================
 
 def video_frame_callback(frame):
 
+    global frame_counter
+
+    frame_counter += 1
+
+    # Отримуємо кадр
     image = frame.to_ndarray(
         format="bgr24"
     )
@@ -153,33 +164,53 @@ def video_frame_callback(frame):
         1
     )
 
+    # -----------------------------------------------------
+    # НЕ ОБРОБЛЯЄМО КОЖЕН КАДР
+    #
+    # Це зменшує навантаження на MediaPipe
+    # і модель.
+    # -----------------------------------------------------
+
+    if frame_counter % 2 != 0:
+
+        return av.VideoFrame.from_ndarray(
+            image,
+            format="bgr24"
+        )
+
     # BGR → RGB
     frame_rgb = cv2.cvtColor(
         image,
         cv2.COLOR_BGR2RGB
     )
 
-    # MediaPipe
+    # =====================================================
+    # MEDIAPIPE
+    # =====================================================
+
     results = hands.process(
         frame_rgb
     )
 
-    # Якщо руки немає
+    # =====================================================
+    # РУКИ НЕМАЄ
+    # =====================================================
+
     if not results.multi_hand_landmarks:
 
         with state_lock:
 
-            recognition_state["result"] = (
-                "Руку не знайдено"
-            )
-
             recognition_state[
-                "prediction_count"
-            ] = 0
+                "result"
+            ] = "Руку не знайдено"
 
             recognition_state[
                 "last_prediction"
             ] = None
+
+            recognition_state[
+                "prediction_count"
+            ] = 0
 
         return av.VideoFrame.from_ndarray(
             image,
@@ -194,7 +225,7 @@ def video_frame_callback(frame):
         results.multi_hand_landmarks[0]
     )
 
-    # Малюємо точки руки
+    # Малюємо точки MediaPipe
     mp_drawing.draw_landmarks(
         frame_rgb,
         hand_landmarks,
@@ -202,7 +233,7 @@ def video_frame_callback(frame):
     )
 
     # =====================================================
-    # 63 ОЗНАКИ
+    # ФОРМУЄМО 63 ОЗНАКИ
     # =====================================================
 
     features = []
@@ -254,18 +285,19 @@ def video_frame_callback(frame):
                 else:
 
                     recognition_state[
-                        "prediction_count"
-                    ] = 1
-
-                    recognition_state[
                         "last_prediction"
                     ] = prediction
 
+                    recognition_state[
+                        "prediction_count"
+                    ] = 1
+
+                # Підтверджуємо жест
+                # після FRAME_THRESHOLD кадрів
                 if (
                     recognition_state[
                         "prediction_count"
-                    ]
-                    >= FRAME_THRESHOLD
+                    ] >= FRAME_THRESHOLD
                 ):
 
                     recognition_state[
@@ -276,7 +308,6 @@ def video_frame_callback(frame):
                     )
 
         except Exception:
-
             pass
 
     # =====================================================
@@ -315,7 +346,7 @@ with st.sidebar:
 
     st.markdown("""
     1. Натисніть **START**.
-    2. Дозвольте доступ до камери.
+    2. Дозвольте браузеру доступ до камери.
     3. Покажіть один жест.
     4. Тримайте руку нерухомо 1–2 секунди.
     5. Перегляньте результат.
@@ -325,9 +356,9 @@ with st.sidebar:
     st.markdown("### Поради")
 
     st.markdown("""
-    - достатнє освітлення;
-    - рука повністю в кадрі;
-    - рука ближче до центру;
+    - використовуйте достатнє освітлення;
+    - тримайте всю кисть у кадрі;
+    - розташовуйте руку по центру;
     - показуйте один жест;
     - не рухайте рукою занадто швидко.
     """)
@@ -359,14 +390,23 @@ with col1:
         video_frame_callback=video_frame_callback,
 
         media_stream_constraints={
-            "video": True,
+            "video": {
+                "width": {
+                    "ideal": 640
+                },
+                "height": {
+                    "ideal": 480
+                },
+                "frameRate": {
+                    "ideal": 15,
+                    "max": 20
+                }
+            },
             "audio": False
         },
 
-        # Без зайвих кнопок
         media_toggle_controls=False,
 
-        # Без Play / Pause / таймера
         video_html_attrs=VideoHTMLAttributes(
             autoPlay=True,
             controls=False,
@@ -383,7 +423,10 @@ with col1:
             ]
         },
 
-        async_processing=True
+        # ВАЖЛИВО:
+        # синхронна обробка не дозволяє
+        # накопичувати старі кадри
+        async_processing=False
     )
 
 
@@ -404,19 +447,9 @@ with col2:
 
     st.write("")
 
-    # Кнопка озвучення
-    speak_button = st.button(
-        "🔊 Озвучити результат",
-        use_container_width=True
-    )
-
-
-# =========================================================
-# АВТОМАТИЧНЕ ОНОВЛЕННЯ РЕЗУЛЬТАТУ
-# =========================================================
-
-@st.fragment(run_every=0.2)
-def show_result():
+    # -----------------------------------------------------
+    # ОТРИМУЄМО ПОТОЧНИЙ РЕЗУЛЬТАТ
+    # -----------------------------------------------------
 
     with state_lock:
 
@@ -424,12 +457,16 @@ def show_result():
             "result"
         ]
 
+    # -----------------------------------------------------
+    # РЕЗУЛЬТАТ
+    # -----------------------------------------------------
+
     if current_result == "Руку не знайдено":
 
         result_placeholder.markdown(
             """
             <div class="result-text"
-                 style="color: #888;">
+                 style="color:#888;">
                 Руку не знайдено
             </div>
             """,
@@ -441,15 +478,31 @@ def show_result():
         result_placeholder.markdown(
             f"""
             <div class="result-text"
-                 style="color: #FF4B4B;">
+                 style="color:#FF4B4B;">
                 {current_result}
             </div>
             """,
             unsafe_allow_html=True
         )
 
+    st.write("---")
 
-show_result()
+    st.markdown(
+        "### 🔊 Озвучення"
+    )
+
+    st.markdown(
+        "<div class='info-text'>"
+        "Натисніть кнопку нижче, щоб створити "
+        "українську озвучку результату."
+        "</div>",
+        unsafe_allow_html=True
+    )
+
+    speak_button = st.button(
+        "🔊 Озвучити результат",
+        use_container_width=True
+    )
 
 
 # =========================================================
@@ -464,21 +517,33 @@ if speak_button:
             "result"
         ]
 
-    if text_to_speak not in [
-        "Руку не знайдено",
-        "Розпізнавання..."
-    ]:
+    if text_to_speak == "Руку не знайдено":
+
+        st.warning(
+            "Спочатку покажіть жест."
+        )
+
+    else:
 
         try:
+
+            # -------------------------------------------------
+            # Прибираємо emoji для gTTS
+            # -------------------------------------------------
 
             clean_text = ''.join(
                 c for c in text_to_speak
                 if c.isalnum() or c.isspace()
             )
 
+            # -------------------------------------------------
+            # Створюємо українську озвучку
+            # -------------------------------------------------
+
             tts = gTTS(
                 text=clean_text,
-                lang="uk"
+                lang="uk",
+                slow=False
             )
 
             audio_buffer = io.BytesIO()
@@ -489,10 +554,61 @@ if speak_button:
 
             audio_buffer.seek(0)
 
-            st.audio(
-                audio_buffer,
-                format="audio/mp3",
-                autoplay=True
+            # -------------------------------------------------
+            # АУДІО
+            # -------------------------------------------------
+
+            audio_bytes = audio_buffer.read()
+
+            audio_b64 = base64.b64encode(
+                audio_bytes
+            ).decode()
+
+            audio_html = f"""
+            <div style="
+                display:flex;
+                flex-direction:column;
+                align-items:center;
+                gap:10px;
+                margin-top:15px;
+            ">
+
+                <audio
+                    id="gestureAudio"
+                    controls
+                    style="width:100%;"
+                >
+                    <source
+                        src="data:audio/mp3;base64,{audio_b64}"
+                        type="audio/mpeg"
+                    >
+                </audio>
+
+                <button
+                    onclick="
+                        document
+                        .getElementById('gestureAudio')
+                        .play();
+                    "
+                    style="
+                        background:#FF4B4B;
+                        color:white;
+                        border:none;
+                        border-radius:12px;
+                        padding:10px 25px;
+                        font-size:16px;
+                        cursor:pointer;
+                    "
+                >
+                    ▶️ Прослухати
+                </button>
+
+            </div>
+            """
+
+            st.components.v1.html(
+                audio_html,
+                height=100
             )
 
         except Exception as e:
@@ -501,35 +617,14 @@ if speak_button:
                 f"Помилка озвучення: {e}"
             )
 
-    else:
-
-        st.warning(
-            "Спочатку покажіть жест."
-        )
-
-
-# =========================================================
-# СТАТУС
-# =========================================================
-
 if ctx.state.playing:
 
-    st.markdown(
-        """
-        <div class="camera-status">
-            🟢 Камера увімкнена
-        </div>
-        """,
-        unsafe_allow_html=True
+    st.success(
+        "🟢 Камера увімкнена"
     )
 
 else:
 
-    st.markdown(
-        """
-        <div class="camera-status">
-            🔵 Натисніть START, щоб увімкнути камеру
-        </div>
-        """,
-        unsafe_allow_html=True
+    st.info(
+        "🔵 Натисніть START, щоб увімкнути камеру."
     )
