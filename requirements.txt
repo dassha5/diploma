@@ -3,3 +3,4 @@ opencv-python-headless
 mediapipe
 numpy
 gTTS
+scikit-learn
