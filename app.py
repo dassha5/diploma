@@ -2,8 +2,7 @@ import os
 import streamlit as st
 import cv2
 import numpy as np
-from mediapipe.python.solutions import hands as mp_hands
-from mediapipe.python.solutions import drawing_utils as mp_drawing
+import mediapipe as mp
 import pickle
 import time
 from gtts import gTTS
@@ -70,16 +69,22 @@ def speak_text(text):
     if text and text not in ["Руку не знайдено", "Розпізнавання..."]:
         try:
             clean_text = ''.join(
-                c for c in text if c.isalnum() or c.isspace()
+                c for c in text
+                if c.isalnum() or c.isspace()
             )
 
-            tts = gTTS(text=clean_text, lang='uk')
+            tts = gTTS(
+                text=clean_text,
+                lang='uk'
+            )
 
             fp = io.BytesIO()
             tts.write_to_fp(fp)
             fp.seek(0)
 
-            b64 = base64.b64encode(fp.read()).decode()
+            b64 = base64.b64encode(
+                fp.read()
+            ).decode()
 
             unique_id = int(time.time())
 
@@ -91,17 +96,28 @@ def speak_text(text):
                 </audio>
             '''
 
-            st.components.v1.html(audio_html, height=0)
+            st.components.v1.html(
+                audio_html,
+                height=0
+            )
 
         except Exception as e:
-            st.error(f"Помилка озвучки: {e}")
+            st.error(
+                f"Помилка озвучки: {e}"
+            )
 
 
 @st.cache_resource
 def load_resources():
 
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    model_path = os.path.join(current_dir, 'gesture_model.pkl')
+    current_dir = os.path.dirname(
+        os.path.abspath(__file__)
+    )
+
+    model_path = os.path.join(
+        current_dir,
+        'gesture_model.pkl'
+    )
 
     with open(model_path, 'rb') as f:
         data = pickle.load(f)
@@ -110,21 +126,25 @@ def load_resources():
         data['model'],
         data['scaler'],
 
-        mp_hands.Hands(
+        mp.solutions.hands.Hands(
             static_image_mode=False,
             max_num_hands=1,
             min_detection_confidence=0.5,
             model_complexity=0
         ),
 
-        mp_drawing
+        mp.solutions.drawing_utils
     )
 
 
 model, scaler, hands, mp_drawing = load_resources()
 
+mp_hands = mp.solutions.hands
 
-st.title("Інтелектуальна система розпізнавання жестів")
+
+st.title(
+    "Інтелектуальна система розпізнавання жестів"
+)
 
 
 col1, col2 = st.columns([1.5, 1])
@@ -139,7 +159,9 @@ with st.sidebar:
         value=True
     )
 
-    st.markdown("### Інструкція користування")
+    st.markdown(
+        "### Інструкція користування"
+    )
 
     st.markdown("""
     1. Увімкніть камеру.  
@@ -174,7 +196,9 @@ with col1:
 with col2:
 
     st.markdown(
-        "<p class='status-text'>Результат розпізнавання:</p>",
+        "<p class='status-text'>"
+        "Результат розпізнавання:"
+        "</p>",
         unsafe_allow_html=True
     )
 
@@ -182,15 +206,21 @@ with col2:
 
     st.write("---")
 
-    if st.button("🔊 Озвучити результат"):
+    if st.button(
+        "🔊 Озвучити результат"
+    ):
 
         if 'last_detected' in st.session_state:
+
             speak_text(
                 st.session_state.last_detected
             )
 
         else:
-            st.warning("Жест ще не розпізнано")
+
+            st.warning(
+                "Жест ще не розпізнано"
+            )
 
 
 if run:
@@ -209,14 +239,19 @@ if run:
         if not ret:
             break
 
-        frame = cv2.flip(frame, 1)
+        frame = cv2.flip(
+            frame,
+            1
+        )
 
         frame_rgb = cv2.cvtColor(
             frame,
             cv2.COLOR_BGR2RGB
         )
 
-        results = hands.process(frame_rgb)
+        results = hands.process(
+            frame_rgb
+        )
 
         current_display = "Руку не знайдено"
 
@@ -225,7 +260,9 @@ if run:
 
             current_display = "Розпізнавання..."
 
-            hand_landmarks = results.multi_hand_landmarks[0]
+            hand_landmarks = (
+                results.multi_hand_landmarks[0]
+            )
 
             mp_drawing.draw_landmarks(
                 frame_rgb,
@@ -284,9 +321,12 @@ if run:
         if current_display == "Руку не знайдено":
 
             result_placeholder.markdown(
-                f"<p class='big-font' "
-                f"style='color: grey; font-size: 40px;'>"
-                f"{current_display}</p>",
+                f"""
+                <p class='big-font'
+                   style='color: grey; font-size: 40px;'>
+                    {current_display}
+                </p>
+                """,
                 unsafe_allow_html=True
             )
 
@@ -294,9 +334,12 @@ if run:
         elif current_display == "Розпізнавання...":
 
             result_placeholder.markdown(
-                f"<p class='big-font' "
-                f"style='color: orange; font-size: 40px;'>"
-                f"{current_display}</p>",
+                f"""
+                <p class='big-font'
+                   style='color: orange; font-size: 40px;'>
+                    {current_display}
+                </p>
+                """,
                 unsafe_allow_html=True
             )
 
@@ -304,13 +347,18 @@ if run:
         else:
 
             result_placeholder.markdown(
-                f"<p class='big-font'>"
-                f"{current_display}</p>",
+                f"""
+                <p class='big-font'>
+                    {current_display}
+                </p>
+                """,
                 unsafe_allow_html=True
             )
 
 
-        FRAME_WINDOW.image(frame_rgb)
+        FRAME_WINDOW.image(
+            frame_rgb
+        )
 
 
     camera.release()
@@ -318,5 +366,6 @@ if run:
 
 else:
 
-    st.warning("Камеру вимкнено")
-
+    st.warning(
+        "Камеру вимкнено"
+    )
