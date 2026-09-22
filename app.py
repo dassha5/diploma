@@ -5,6 +5,7 @@ import mediapipe as mp
 import pickle
 import io
 import threading
+import av
 
 from gtts import gTTS
 
@@ -16,7 +17,7 @@ from streamlit_webrtc import (
 
 
 # ============================================================
-# НАЛАШТУВАННЯ STREAMLIT
+# STREAMLIT
 # ============================================================
 
 st.set_page_config(
@@ -50,62 +51,13 @@ ukr_labels = [
 
 
 # ============================================================
-# CSS
-# ============================================================
-
-st.markdown(
-    """
-    <style>
-
-    .main-title {
-        text-align: center;
-        font-size: 40px;
-        font-weight: 700;
-        margin-bottom: 5px;
-    }
-
-    .subtitle {
-        text-align: center;
-        font-size: 18px;
-        margin-bottom: 25px;
-    }
-
-    .result-box {
-        padding: 30px 15px;
-        border-radius: 15px;
-        border: 1px solid rgba(128,128,128,0.3);
-        text-align: center;
-        margin-top: 15px;
-    }
-
-    .result-title {
-        font-size: 19px;
-        margin-bottom: 10px;
-    }
-
-    .result-text {
-        font-size: 34px;
-        font-weight: 700;
-    }
-
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-
-
-# ============================================================
 # ЗАГОЛОВОК
 # ============================================================
 
-st.markdown(
-    '<div class="main-title">🤟 Автоматичне розпізнавання жестів</div>',
-    unsafe_allow_html=True,
-)
+st.title("🤟 Автоматичне розпізнавання жестів")
 
-st.markdown(
-    '<div class="subtitle">Розпізнавання статичних жестів у реальному часі</div>',
-    unsafe_allow_html=True,
+st.write(
+    "Розпізнавання статичних жестів у реальному часі"
 )
 
 
@@ -122,12 +74,12 @@ with st.sidebar:
         **Як користуватися системою:**
 
         1. Натисніть **START**.
-        2. Дозвольте доступ до камери.
+        2. Дозвольте браузеру доступ до камери.
         3. Покажіть руку в камеру.
-        4. Утримуйте жест декілька моментів.
+        4. Утримуйте жест.
         5. Система визначить жест.
         6. Для озвучення натисніть
-           **«🔊 Озвучити результат»**.
+           кнопку нижче результату.
 
         ---
 
@@ -144,26 +96,24 @@ with st.sidebar:
 
     st.divider()
 
-    st.markdown("### ⚙️ Параметри")
-
-    st.write("📷 Камера: **480 × 360**")
-    st.write("🎞️ Частота: **15 FPS**")
-    st.write("🖐️ Максимум рук: **1**")
-    st.write("🎯 Стабілізація: **3 кадри**")
+    st.write("📷 Камера: 480 × 360")
+    st.write("🎞️ Частота: 15 FPS")
+    st.write("🖐️ Максимум рук: 1")
+    st.write("🎯 Стабілізація: 3 кадри")
 
 
 # ============================================================
-# ЗАВАНТАЖЕННЯ МОДЕЛІ ТА MEDIAPIPE
+# ЗАВАНТАЖЕННЯ МОДЕЛІ
 # ============================================================
 
 @st.cache_resource
-def load_resources():
+def load_model():
 
-    # --------------------------------------------------------
-    # Модель
-    # --------------------------------------------------------
+    with open(
+        "gesture_model.pkl",
+        "rb"
+    ) as file:
 
-    with open("gesture_model.pkl", "rb") as file:
         model_data = pickle.load(file)
 
     if isinstance(model_data, dict):
@@ -177,13 +127,20 @@ def load_resources():
         scaler = None
 
     if model is None:
+
         raise ValueError(
-            "У gesture_model.pkl не знайдено модель."
+            "Модель не знайдена у gesture_model.pkl"
         )
 
-    # --------------------------------------------------------
-    # MediaPipe
-    # --------------------------------------------------------
+    return model, scaler
+
+
+# ============================================================
+# MEDIAPIPE
+# ============================================================
+
+@st.cache_resource
+def load_mediapipe():
 
     mp_hands = mp.solutions.hands
     mp_drawing = mp.solutions.drawing_utils
@@ -197,8 +154,6 @@ def load_resources():
     )
 
     return (
-        model,
-        scaler,
         hands,
         mp_hands,
         mp_drawing,
@@ -211,18 +166,18 @@ def load_resources():
 
 try:
 
+    model, scaler = load_model()
+
     (
-        model,
-        scaler,
         hands,
         mp_hands,
         mp_drawing,
-    ) = load_resources()
+    ) = load_mediapipe()
 
 except Exception as e:
 
     st.error(
-        f"❌ Не вдалося завантажити модель: {e}"
+        f"❌ Помилка завантаження: {e}"
     )
 
     st.stop()
@@ -245,31 +200,29 @@ recognition_state = {
 # СТАБІЛІЗАЦІЯ
 # ============================================================
 
-# 3 однакові прогнози замість 5.
-#
-# Це зменшує затримку появи жесту.
-#
-# Водночас кожен кадр все одно проходить
-# через MediaPipe та модель.
-
 FRAME_THRESHOLD = 3
 
 
 # ============================================================
-# ОБРОБКА КОЖНОГО КАДРУ
+# CALLBACK
 # ============================================================
 
-def video_frame_callback(frame):
+def video_frame_callback(
+    frame: av.VideoFrame
+) -> av.VideoFrame:
 
     # --------------------------------------------------------
-    # Отримуємо кадр
+    # Кадр → NumPy
     # --------------------------------------------------------
 
     image = frame.to_ndarray(
         format="bgr24"
     )
 
+    # --------------------------------------------------------
     # Дзеркальне відображення
+    # --------------------------------------------------------
+
     image = cv2.flip(
         image,
         1
@@ -285,19 +238,19 @@ def video_frame_callback(frame):
     )
 
     # --------------------------------------------------------
-    # MediaPipe
+    # MEDIAPIPE
     #
-    # КОЖЕН отриманий кадр проходить
-    # через MediaPipe.
+    # Кожен кадр, який потрапив у callback,
+    # обробляється MediaPipe.
     # --------------------------------------------------------
 
     results = hands.process(
         rgb_image
     )
 
-    # --------------------------------------------------------
-    # Якщо рука знайдена
-    # --------------------------------------------------------
+    # ========================================================
+    # РУКА ЗНАЙДЕНА
+    # ========================================================
 
     if results.multi_hand_landmarks:
 
@@ -316,7 +269,7 @@ def video_frame_callback(frame):
         )
 
         # ----------------------------------------------------
-        # Отримуємо координати 21 точки
+        # 21 точки
         # ----------------------------------------------------
 
         landmarks = np.array(
@@ -324,7 +277,7 @@ def video_frame_callback(frame):
                 [
                     landmark.x,
                     landmark.y,
-                    landmark.z
+                    landmark.z,
                 ]
                 for landmark
                 in hand_landmarks.landmark
@@ -334,18 +287,16 @@ def video_frame_callback(frame):
 
         # ----------------------------------------------------
         # Нормалізація відносно зап'ястя
-        #
-        # Точка 0 = wrist
         # ----------------------------------------------------
 
-        wrist = landmarks[0].copy()
+        wrist = landmarks[0]
 
         normalized_landmarks = (
             landmarks - wrist
         )
 
         # ----------------------------------------------------
-        # 21 точки × 3 координати = 63 ознаки
+        # 21 × 3 = 63 ознаки
         # ----------------------------------------------------
 
         features = (
@@ -357,7 +308,7 @@ def video_frame_callback(frame):
         try:
 
             # ------------------------------------------------
-            # Scaler
+            # SCALER
             # ------------------------------------------------
 
             if scaler is not None:
@@ -371,7 +322,7 @@ def video_frame_callback(frame):
                 features_scaled = features
 
             # ------------------------------------------------
-            # Передбачення
+            # MODEL
             # ------------------------------------------------
 
             prediction = model.predict(
@@ -379,37 +330,26 @@ def video_frame_callback(frame):
             )[0]
 
             # ------------------------------------------------
-            # Назва жесту
+            # ІНДЕКС → НАЗВА ЖЕСТУ
             # ------------------------------------------------
 
-            try:
+            prediction_index = int(
+                prediction
+            )
 
-                prediction_index = int(
-                    prediction
+            if (
+                0
+                <= prediction_index
+                < len(ukr_labels)
+            ):
+
+                predicted_label = (
+                    ukr_labels[
+                        prediction_index
+                    ]
                 )
 
-                if (
-                    0
-                    <= prediction_index
-                    < len(ukr_labels)
-                ):
-
-                    predicted_label = (
-                        ukr_labels[
-                            prediction_index
-                        ]
-                    )
-
-                else:
-
-                    predicted_label = str(
-                        prediction
-                    )
-
-            except (
-                ValueError,
-                TypeError
-            ):
+            else:
 
                 predicted_label = str(
                     prediction
@@ -443,7 +383,7 @@ def video_frame_callback(frame):
                     ] = 1
 
                 # --------------------------------------------
-                # Підтверджуємо жест
+                # ПІДТВЕРДЖЕННЯ
                 # --------------------------------------------
 
                 if (
@@ -465,11 +405,11 @@ def video_frame_callback(frame):
                     "result"
                 ] = f"Помилка: {e}"
 
-    else:
+    # ========================================================
+    # РУКИ НЕМАЄ
+    # ========================================================
 
-        # ----------------------------------------------------
-        # Руки немає
-        # ----------------------------------------------------
+    else:
 
         with state_lock:
 
@@ -485,30 +425,30 @@ def video_frame_callback(frame):
                 "prediction_count"
             ] = 0
 
-    # --------------------------------------------------------
-    # Повертаємо кадр
-    # --------------------------------------------------------
+    # ========================================================
+    # ПОВЕРТАЄМО КАДР
+    # ========================================================
 
-    return frame.from_ndarray(
+    return av.VideoFrame.from_ndarray(
         image,
         format="bgr24",
     )
 
 
 # ============================================================
-# РОЗДІЛЯЄМО ЕКРАН НА 2 КОЛОНКИ
+# КОЛОНКИ
 # ============================================================
 
-col1, col2 = st.columns(
+camera_col, result_col = st.columns(
     [2.2, 1]
 )
 
 
 # ============================================================
-# ЛІВА ЧАСТИНА — КАМЕРА
+# КАМЕРА
 # ============================================================
 
-with col1:
+with camera_col:
 
     st.subheader("📷 Камера")
 
@@ -518,16 +458,12 @@ with col1:
 
         mode=WebRtcMode.SENDRECV,
 
-        # ----------------------------------------------------
-        # Обробляємо кожен отриманий кадр
-        # ----------------------------------------------------
-
         video_frame_callback=(
             video_frame_callback
         ),
 
         # ----------------------------------------------------
-        # Камера
+        # КАМЕРА
         # ----------------------------------------------------
 
         media_stream_constraints={
@@ -547,10 +483,14 @@ with col1:
         },
 
         # ----------------------------------------------------
-        # Прибираємо зайві video controls
+        # Кнопки камери
         # ----------------------------------------------------
 
         media_toggle_controls=False,
+
+        # ----------------------------------------------------
+        # Відео без controls
+        # ----------------------------------------------------
 
         video_html_attrs=VideoHTMLAttributes(
             autoPlay=True,
@@ -559,7 +499,7 @@ with col1:
         ),
 
         # ----------------------------------------------------
-        # STUN для WebRTC
+        # STUN
         # ----------------------------------------------------
 
         rtc_configuration={
@@ -573,72 +513,45 @@ with col1:
         },
 
         # ----------------------------------------------------
-        # Дуже важливо для низької затримки
-        #
-        # Не створюємо чергу старих кадрів.
-        # Кожен отриманий кадр обробляється
-        # послідовно.
+        # REAL-TIME PROCESSING
         # ----------------------------------------------------
 
-        async_processing=False,
+        async_processing=True,
     )
 
 
 # ============================================================
-# ПРАВА ЧАСТИНА — РЕЗУЛЬТАТ
+# РЕЗУЛЬТАТ
 # ============================================================
 
-with col2:
+with result_col:
 
     st.subheader("🎯 Результат")
 
-    result_placeholder = st.empty()
+    result_box = st.empty()
 
 
     # --------------------------------------------------------
-    # Окремо оновлюємо тільки результат
+    # Відображення результату
     # --------------------------------------------------------
 
-    @st.fragment(
-        run_every=0.2
-    )
-    def show_result():
+    with state_lock:
 
-        with state_lock:
-
-            result = recognition_state[
-                "result"
-            ]
-
-        result_placeholder.markdown(
-            f"""
-            <div class="result-box">
-
-                <div class="result-title">
-                    Розпізнаний жест:
-                </div>
-
-                <div class="result-text">
-                    {result}
-                </div>
-
-            </div>
-            """,
-            unsafe_allow_html=True,
+        current_result = (
+            recognition_state["result"]
         )
 
+    result_box.success(
+        f"Розпізнаний жест:\n\n"
+        f"### {current_result}"
+    )
 
-    show_result()
 
+    # --------------------------------------------------------
+    # КНОПКА ОЗВУЧЕННЯ
+    # --------------------------------------------------------
 
     st.write("")
-
-
-    # ========================================================
-    # ОЗВУЧЕННЯ
-    # ========================================================
-
-    st.subheader("🔊 Озвучення")
 
     speak_button = st.button(
         "🔊 Озвучити результат",
@@ -651,9 +564,7 @@ with col2:
         with state_lock:
 
             current_result = (
-                recognition_state[
-                    "result"
-                ]
+                recognition_state["result"]
             )
 
         if (
@@ -665,13 +576,6 @@ with col2:
         ):
 
             try:
-
-                # --------------------------------------------
-                # TTS запускається ТІЛЬКИ після натискання
-                # кнопки.
-                #
-                # Він НЕ бере участі у video callback.
-                # --------------------------------------------
 
                 tts = gTTS(
                     text=current_result,
@@ -713,11 +617,11 @@ st.divider()
 if ctx.state.playing:
 
     st.success(
-        "🟢 Камера працює — показуйте жест."
+        "🟢 Камера працює"
     )
 
 else:
 
     st.info(
-        "🔵 Натисніть START, щоб увімкнути камеру."
+        "🔵 Натисніть START, щоб увімкнути камеру"
     )
