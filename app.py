@@ -12,7 +12,7 @@ import io
 
 
 st.set_page_config(
-    page_title="Sign Language Translator",
+    page_title="Gesture Translator",
     page_icon="🖐️",
     layout="wide",
     initial_sidebar_state="expanded"
